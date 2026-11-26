@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<session version="1.0">
+<refactoring comment="Rename resource &apos;LoRa_Test_Code_v1/Core/Inc/lwgps_opts.h&apos; to &apos;lwgps_opt.h&apos;" description="Rename resource &apos;lwgps_opts.h&apos;" flags="7" id="org.eclipse.ltk.core.refactoring.rename.resource" input="Core/Inc/lwgps_opts.h" name="lwgps_opt.h" stamp="1794858693149" updateReferences="true"/>
+</session>

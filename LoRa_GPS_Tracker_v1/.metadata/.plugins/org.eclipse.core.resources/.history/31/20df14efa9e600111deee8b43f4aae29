@@ -1,0 +1,341 @@
+/* USER CODE BEGIN Header */
+/**
+  ******************************************************************************
+  * @file           : main.c
+  * @brief          : Main program body
+  ******************************************************************************
+  * @attention
+  *
+  * Copyright (c) 2026 STMicroelectronics.
+  * All rights reserved.
+  *
+  * This software is licensed under terms that can be found in the LICENSE file
+  * in the root directory of this software component.
+  * If no LICENSE file comes with this software, it is provided AS-IS.
+  *
+  ******************************************************************************
+  */
+/* USER CODE END Header */
+/* Includes ------------------------------------------------------------------*/
+#include "main.h"
+#include "spi.h"
+#include "usart.h"
+#include "gpio.h"
+
+/* Private includes ----------------------------------------------------------*/
+/* USER CODE BEGIN Includes */
+#include "LoRa.h"
+#include <stdio.h>
+#include <stdint.h>
+#include "lwgps.h"
+#include <string.h>
+
+/* USER CODE END Includes */
+
+/* Private typedef -----------------------------------------------------------*/
+/* USER CODE BEGIN PTD */
+
+/* USER CODE END PTD */
+
+/* Private define ------------------------------------------------------------*/
+/* USER CODE BEGIN PD */
+#define GPS_RX_BUF_SIZE   256U      /* DMA ring buffer, bigger than the longest NMEA line (82) */
+#define GPS_PRINT_MS      1000U     /* how often to print */
+/* USER CODE END PD */
+
+/* Private macro -------------------------------------------------------------*/
+/* USER CODE BEGIN PM */
+
+/* USER CODE END PM */
+
+/* Private variables ---------------------------------------------------------*/
+
+/* USER CODE BEGIN PV */
+/****************** LORA TESTING DEBUG ************/
+char dbg[64];				// Added for printing debug
+
+/***************** GPS TESTING CODE BEGIN *********************/
+static lwgps_t           hgps;                        /* lwgps handle */
+static uint8_t           gps_dma_buf[GPS_RX_BUF_SIZE];
+static volatile uint16_t gps_head = 0;                /* written in callback (where DMA has reached) */
+static uint16_t          gps_tail = 0;                /* how far main loop has parsed */
+
+/******************** GPS TESTING CODE END *******************/
+/* USER CODE END PV */
+
+/* Private function prototypes -----------------------------------------------*/
+void SystemClock_Config(void);
+/* USER CODE BEGIN PFP */
+void UART_Print(char *message)
+{
+    HAL_UART_Transmit(&huart2,
+                      (uint8_t*)message,
+                      strlen(message),
+                      HAL_MAX_DELAY);
+}
+/* USER CODE END PFP */
+
+/* Private user code ---------------------------------------------------------*/
+/* USER CODE BEGIN 0 */
+
+/* Called by HAL on: DMA half-full, DMA full, and UART IDLE line (gap between bytes).
+ * We only note where the DMA write position is. Parsing happens in main loop,
+ * so the interrupt stays tiny. */
+void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
+{
+    if (huart->Instance == USART1) {
+        gps_head = Size;
+    }
+}
+
+/* If UART hits an error (overrun / framing / noise) HAL stops reception.
+ * Restart it so the GPS never "freezes" silently. */
+void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
+{
+    if (huart->Instance == USART1) {
+        gps_head = 0;
+        gps_tail = 0;
+        HAL_UARTEx_ReceiveToIdle_DMA(&huart1, gps_dma_buf, GPS_RX_BUF_SIZE);
+    }
+}
+
+/********************* GPS TESTING FUNCTION BEGIN **************************/
+
+/* Feed whatever new bytes DMA has dropped into the buffer to lwgps */
+//static void gps_poll(void)
+//{
+//    uint16_t head = gps_head;           /* single read of the volatile */
+//
+//    if (head == gps_tail) {
+//        return;                         /* nothing new */
+//    }
+//
+//    /* DEBUG: echo raw GPS bytes to serial monitor */
+//    if (head > gps_tail) {
+//        HAL_UART_Transmit(&huart2, &gps_dma_buf[gps_tail], head - gps_tail, 100);
+//    } else {
+//        HAL_UART_Transmit(&huart2, &gps_dma_buf[gps_tail], GPS_RX_BUF_SIZE - gps_tail, 100);
+//        if (head > 0) HAL_UART_Transmit(&huart2, &gps_dma_buf[0], head, 100);
+//    }
+//
+//    if (head > gps_tail) {              /* simple case, no wrap */
+//        lwgps_process(&hgps, &gps_dma_buf[gps_tail], head - gps_tail);
+//    } else {                            /* wrapped: tail->end, then 0->head */
+//        lwgps_process(&hgps, &gps_dma_buf[gps_tail], GPS_RX_BUF_SIZE - gps_tail);
+//        if (head > 0) {
+//            lwgps_process(&hgps, &gps_dma_buf[0], head);
+//        }
+//    }
+//    gps_tail = head % GPS_RX_BUF_SIZE;
+//}
+//
+///* Print one line on USART2 */
+//static void gps_print(void)
+//{
+//    char msg[200];
+//    int  n;
+//
+//    if (!hgps.is_valid) {
+//        n = snprintf(msg, sizeof(msg),
+//                     "No fix yet | sats in view: %d | sats in use: %d\r\n",
+//                     (int)hgps.sats_in_view, (int)hgps.sats_in_use);
+//    } else {
+//        n = snprintf(msg, sizeof(msg),
+//                     "Lat: %.6f  Lon: %.6f  Alt: %.1f m  Speed: %.1f km/h  " "Sats: %d  UTC: %02d:%02d:%02d\r\n",(double)hgps.latitude,(double)hgps.longitude,(double)hgps.altitude,(double)lwgps_to_speed(hgps.speed, LWGPS_SPEED_KPH),(int)hgps.sats_in_use,(int)hgps.hours, (int)hgps.minutes, (int)hgps.seconds);
+//    }
+//    HAL_UART_Transmit(&huart2, (uint8_t *)msg, (uint16_t)n, 100);
+//}
+
+/******************************************** GPS TESTING CODE END *****************************************/
+/* USER CODE END 0 */
+
+/**
+  * @brief  The application entry point.
+  * @retval int
+  */
+int main(void)
+{
+
+  /* USER CODE BEGIN 1 */
+
+  /* USER CODE END 1 */
+
+  /* MCU Configuration--------------------------------------------------------*/
+
+  /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
+  HAL_Init();
+
+  /* USER CODE BEGIN Init */
+
+  /* USER CODE END Init */
+
+  /* Configure the system clock */
+  SystemClock_Config();
+
+  /* USER CODE BEGIN SysInit */
+
+  /* USER CODE END SysInit */
+
+  /* Initialize all configured peripherals */
+  MX_GPIO_Init();
+  MX_USART2_UART_Init();
+  MX_SPI1_Init();
+  MX_USART1_UART_Init();
+  /* USER CODE BEGIN 2 */
+
+
+
+  /************************** LORA TESTING CODE ***********************************/
+
+  LoRa myLora = newLoRa();
+
+  myLora.CS_port     = LORA_NSS_GPIO_Port;
+  myLora.CS_pin      = LORA_NSS_Pin;
+  myLora.reset_port  = LORA_RST_GPIO_Port;
+  myLora.reset_pin   = LORA_RST_Pin;
+  myLora.DIO0_port   = GPIO_EXTI1_GPIO_Port;
+  myLora.DIO0_pin    = GPIO_EXTI1_Pin;
+  myLora.hSPIx       = &hspi1;
+
+  // must be identical on both nodes (check newLoRa() for the defaults)
+  // myLora.frequency        = 433;   // match your module's band
+  // myLora.spredingFactor   = SF_7;  // the library spells it "spreding"
+  // myLora.bandWidth        = BW_125KHz;
+
+  /************* Added for debug ****************/
+
+  sprintf(dbg, "RegVersion: 0x%02X\r\n", LoRa_read(&myLora, 0x42));
+  UART_Print(dbg);
+
+
+  char buf[64];
+  uint16_t st = LoRa_init(&myLora);
+  sprintf(buf, "LoRa_Status: %d\r\n", st);
+  UART_Print(buf);
+
+
+  /************************** LORA TESTING CODE END *******************************/
+
+
+  /************************** GPS TESTING CODE BEGIN ******************************/
+//  lwgps_init(&hgps);
+//
+//  if (HAL_UARTEx_ReceiveToIdle_DMA(&huart1, gps_dma_buf, GPS_RX_BUF_SIZE) != HAL_OK) {
+//      const char *e = "DMA start FAILED\r\n";
+//      HAL_UART_Transmit(&huart2, (uint8_t *)e, strlen(e), 100);
+//  }
+//
+//  const char *hello = "GPS demo started, waiting for NMEA data...\r\n";
+//  HAL_UART_Transmit(&huart2, (uint8_t *)hello, strlen(hello), 100);
+//
+//  uint32_t last_print = HAL_GetTick();
+
+  /************************ GPS TESTING CODE END *******************************/
+  uint8_t data[4] = {1, 2, 3, 4};
+  /* USER CODE END 2 */
+
+  /* Infinite loop */
+  /* USER CODE BEGIN WHILE */
+  while (1)
+  {
+    /* USER CODE END WHILE */
+
+    /* USER CODE BEGIN 3 */
+	  /****************** LORA TESTING CODE BEGIN *********************/
+	  uint8_t ok = LoRa_transmit(&myLora, data, sizeof(data), 500);
+
+	  sprintf(buf, "TX %s\r\n", ok ? "sent" : "FAILED");
+	  UART_Print(buf);
+
+	  HAL_Delay(1000);
+
+	  /****************** LORA TESTING CODE END ************************/
+
+
+	  /****************** GPS TESTING CODE BEGIN ***********************/
+//    gps_poll();
+//
+//    if (HAL_GetTick() - last_print >= GPS_PRINT_MS) {
+//        last_print += GPS_PRINT_MS;
+//        gps_print();
+//    }
+    /******************** GPS TESTING CODE END **************************/
+  /* USER CODE END 3 */
+}
+
+/**
+  * @brief System Clock Configuration
+  * @retval None
+  */
+void SystemClock_Config(void)
+{
+  RCC_OscInitTypeDef RCC_OscInitStruct = {0};
+  RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
+
+  /** Initializes the RCC Oscillators according to the specified parameters
+  * in the RCC_OscInitTypeDef structure.
+  */
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI;
+  RCC_OscInitStruct.HSIState = RCC_HSI_ON;
+  RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
+  RCC_OscInitStruct.PLL.PLLState = RCC_PLL_NONE;
+  if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  /** Initializes the CPU, AHB and APB buses clocks
+  */
+  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
+                              |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
+  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_HSI;
+  RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
+  RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV1;
+  RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
+
+  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_0) != HAL_OK)
+  {
+    Error_Handler();
+  }
+}
+
+/* USER CODE BEGIN 4 */
+//// void UART_Print(char *message)
+//{
+//    HAL_UART_Transmit(&huart2,
+//                      (uint8_t*)message,
+//                      strlen(message),
+//                      HAL_MAX_DELAY);
+//}
+/* USER CODE END 4 */
+
+/**
+  * @brief  This function is executed in case of error occurrence.
+  * @retval None
+  */
+void Error_Handler(void)
+{
+  /* USER CODE BEGIN Error_Handler_Debug */
+  /* User can add his own implementation to report the HAL error return state */
+  __disable_irq();
+  while (1)
+  {
+  }
+  /* USER CODE END Error_Handler_Debug */
+}
+#ifdef USE_FULL_ASSERT
+/**
+  * @brief  Reports the name of the source file and the source line number
+  *         where the assert_param error has occurred.
+  * @param  file: pointer to the source file name
+  * @param  line: assert_param error line source number
+  * @retval None
+  */
+void assert_failed(uint8_t *file, uint32_t line)
+{
+  /* USER CODE BEGIN 6 */
+  /* User can add his own implementation to report the file name and line number,
+     ex: printf("Wrong parameters value: file %s on line %d\r\n", file, line) */
+  /* USER CODE END 6 */
+}
+#endif /* USE_FULL_ASSERT */

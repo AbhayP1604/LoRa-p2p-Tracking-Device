@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<section name="Workbench">
+	<item key="hasShownOverlayPopupBefore" value="true"/>
+	<item key="replaceBarOpen" value="false"/>
+	<list key="searchhistory">
+		<item value="UART_Print"/>
+		<item value="RegIRqflags"/>
+		<item value="RegIR1flags"/>
+		<item value="HAL_GPIO_EXTI_Callback  "/>
+		<item value="lwgps_t"/>
+		<item value="Transmit"/>
+		<item value="transmit"/>
+	</list>
+	<list key="replacehistory">
+		<item value="hspi"/>
+	</list>
+</section>

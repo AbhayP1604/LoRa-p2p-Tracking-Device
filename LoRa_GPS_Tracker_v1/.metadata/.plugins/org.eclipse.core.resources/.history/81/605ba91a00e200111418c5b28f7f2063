@@ -1,0 +1,12 @@
+/**
+ * lwgps_opts.h  ->  put this in Core/Inc (anywhere on your include path)
+ *
+ * Cortex-M3 (STM32F103) has no FPU, so 'double' math is done in software:
+ * slow and bulky. 'float' is plenty for GPS coordinates at 6 decimals.
+ */
+#ifndef LWGPS_HDR_OPTS_H
+#define LWGPS_HDR_OPTS_H
+
+#define LWGPS_CFG_DOUBLE    0   /* use float instead of double */
+
+#endif /* LWGPS_HDR_OPTS_H */
