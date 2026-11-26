@@ -124,11 +124,9 @@ void LoRa_gotoMode(LoRa* _LoRa, int mode){
 void LoRa_readReg(LoRa* _LoRa, uint8_t* address, uint16_t r_length, uint8_t* output, uint16_t w_length){
 	HAL_GPIO_WritePin(_LoRa->CS_port, _LoRa->CS_pin, GPIO_PIN_RESET);
 	HAL_SPI_Transmit(_LoRa->hSPIx, address, r_length, TRANSMIT_TIMEOUT);
-	while (HAL_SPI_GetState(_LoRa->hSPIx) != HAL_SPI_STATE_READY)
-		;
+	while (HAL_SPI_GetState(_LoRa->hSPIx) != HAL_SPI_STATE_READY);
 	HAL_SPI_Receive(_LoRa->hSPIx, output, w_length, RECEIVE_TIMEOUT);
-	while (HAL_SPI_GetState(_LoRa->hSPIx) != HAL_SPI_STATE_READY)
-		;
+	while (HAL_SPI_GetState(_LoRa->hSPIx) != HAL_SPI_STATE_READY);
 	HAL_GPIO_WritePin(_LoRa->CS_port, _LoRa->CS_pin, GPIO_PIN_SET);
 }
 
@@ -695,7 +693,7 @@ int8_t LoRa_startcadmode(LoRa* _LoRa, uint32_t timeout_ms)
     uint32_t t0 = HAL_GetTick();
     do {
         flags = LoRa_read(_LoRa, RegIrqFlags);
-        if (flags & 0x04) break;              // CadDone
+        if (flags & 0x04) break;             // CadDone
     } while ((HAL_GetTick() - t0) < timeout_ms);
 
     LoRa_write(_LoRa, RegIrqFlags, 0xFF);     // clear once, after reading
@@ -709,9 +707,13 @@ uint8_t LoRa_checkRx(LoRa* _LoRa, uint8_t* data, uint8_t length){
 	uint8_t flags = LoRa_read(_LoRa, RegIrqFlags);
 	uint8_t min = 0;
 
-	if(!(flags & 0x40)) return 0;               // no packet yet
-	if(!(flags & 0x20)){                        // CRC ok
-		uint8_t n    = LoRa_read(_LoRa, RegRxNbBytes);
+	if(!(flags & 0x40)) {							// no packet yet
+//		UART_Print("no PACKET rcv\r\n");
+		return 0;
+	}
+	if(!(flags & 0x20)){                         // CRC ok -  packet received
+		uint8_t n = LoRa_read(_LoRa, RegRxNbBytes);
+//		UART_Print("Packet Received \r\n");
 		uint8_t addr = LoRa_read(_LoRa, RegFiFoRxCurrentAddr);
 		LoRa_write(_LoRa, RegFiFoAddPtr, addr);
 		min = (n < length) ? n : length;

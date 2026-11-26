@@ -18,6 +18,10 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
+#include "dma.h"
+#include "spi.h"
+#include "usart.h"
+#include "gpio.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -49,6 +53,7 @@
 #define TAG_ACK_WAIT_MS   10000U
 #define SEEKER_LISTEN_MS  4000U
 #define GPS_SEND_MS       1000U
+#define TIMEOUT_RX		7000U
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -57,11 +62,6 @@
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
-SPI_HandleTypeDef hspi1;
-
-UART_HandleTypeDef huart1;
-UART_HandleTypeDef huart2;
-DMA_HandleTypeDef hdma_usart1_rx;
 
 /* USER CODE BEGIN PV */
 /***************** GPS TESTING CODE BEGIN *********************/
@@ -77,13 +77,9 @@ char dbg[64];				// Added for printing debug
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
-static void MX_GPIO_Init(void);
-static void MX_DMA_Init(void);
-static void MX_SPI1_Init(void);
-static void MX_USART1_UART_Init(void);
-static void MX_USART2_UART_Init(void);
 /* USER CODE BEGIN PFP */
 void UART_Print(char *message);
+static void gps_print(void);
 
 /* USER CODE END PFP */
 
@@ -113,6 +109,7 @@ static uint8_t gps_pack(uint8_t* p, uint8_t seq)
     memcpy(&p[8], &lon, 4);
     return 12;
 }
+/******************************************** GPS TESTING CODE END *****************************************/
 
 /********************* GPS TESTING FUNCTION BEGIN **************************/
 
@@ -147,6 +144,34 @@ static void gps_poll(void)
     }
     gps_tail = head % GPS_RX_BUF_SIZE;
 }
+
+
+/****************************** DEBUG CODE ****************************/
+/* continuous RX for up to timeout_ms; returns bytes of the first valid packet, 0 if none */
+static uint8_t  dbg_irq, dbg_stat;
+static uint32_t dbg_first_ms;
+
+static uint8_t rx_window(LoRa* l, uint8_t* buf, uint8_t len, uint32_t timeout_ms)
+{
+    uint8_t n = 0;
+    dbg_irq = 0; dbg_stat = 0; dbg_first_ms = 0;
+    LoRa_write(l, RegIrqFlagsMask, 0x00);
+    LoRa_write(l, RegIrqFlags, 0xFF);
+    LoRa_startReceiving(l);
+    uint32_t t0 = HAL_GetTick();
+    while (n == 0 && (HAL_GetTick() - t0) < timeout_ms) {
+        gps_poll();
+        uint8_t st = LoRa_read(l, 0x18);                  // RegModemStat
+        if ((st & 0x01) && dbg_first_ms == 0) dbg_first_ms = HAL_GetTick() - t0 + 1;
+        dbg_stat |= st;
+        dbg_irq  |= LoRa_read(l, 0x12);                   // read before checkRx clears it
+        n = LoRa_checkRx(l, buf, len);
+    }
+    LoRa_gotoMode(l, STNBY_MODE);
+    return n;
+}
+
+/************************** DEBUG CODE ***********************************/
 
 /* Print one line on USART2 */
 static void gps_print(void)
@@ -259,7 +284,7 @@ int main(void)
   const char *hello = "GPS demo started, waiting for NMEA data...\r\n";
   HAL_UART_Transmit(&huart2, (uint8_t *)hello, strlen(hello), 100);
 
-  //uint32_t last_print = HAL_GetTick();
+  uint32_t last_print = HAL_GetTick();
 
   /************************ GPS TESTING CODE END *******************************/
 
@@ -280,24 +305,37 @@ int main(void)
 //		  UART_Print("CAD timeout, check SPI/wiring\r\n");
 //	  }
 //	      // cad == 0: nothing heard, loop back to sleep
-//    /* USER CODE END WHILE */
-//
-//    /* USER CODE BEGIN 3 */
+    /* USER CODE END WHILE */
+
+    /* USER CODE BEGIN 3 */
 //  }
   	while (1)
   	{
 #if ROLE_TAG
 			UART_Print("[TAG] sleep\r\n");
 			LoRa_gotoMode(&myLora, SLEEP_MODE);
-			uint32_t t0 = HAL_GetTick();
+			uint32_t t0 = HAL_GetTick(); // instant value
 			while ((HAL_GetTick() - t0 ) < TAG_SLEEP_MS) gps_poll();   // placeholder for RTC + Stop mode later
 
+			//after 1sec we go into CAD Mode
 			int8_t cad = LoRa_startcadmode(&myLora, 200);
+			//200ms max >
 
 			if (cad != 1) continue;                                  // clear: back to sleep
 			UART_Print("[TAG] CAD detected, checking sync word\r\n");
 
-			n = LoRa_receive(&myLora, rx, sizeof(rx), 7000);
+			n = rx_window(&myLora, rx, sizeof(rx), TIMEOUT_RX);			// DEBUG CODE //received data in rx from RxBuffer with n as size of data
+
+			sprintf(dbg, "[TAG] n=%d irq=0x%02X stat=0x%02X first=%lums\r\n",
+			        n, dbg_irq, dbg_stat, (unsigned long)dbg_first_ms);
+			UART_Print(dbg);
+
+
+			snprintf(dbg, sizeof(dbg), "Datalength ==> %d | Rx values--> rx[0]: %d rx[1]: %d rx[2]: %d \r\n", n, rx[0],rx[1],rx[2]);
+			UART_Print(dbg);
+
+
+//			n = LoRa_receive(&myLora, rx, sizeof(rx), 7000);
 			if (!(n >= 3 && rx[0] == MSG_WAKE && rx[1] == MY_TAG_ID)) {
 				UART_Print("[TAG] no valid WAKE, back to sleep\r\n");
 				continue;
@@ -309,13 +347,21 @@ int main(void)
 				uint8_t ack[3] = { MSG_ACK, MY_TAG_ID, seq };
 				LoRa_transmit(&myLora, ack, 3, 500);
 				UART_Print("[TAG] ACK sent, waiting\r\n");
-
+/********************* DEBUG CODE *********************/
 				uint8_t woke = 0;
 				t0 = HAL_GetTick();
-				while (HAL_GetTick() - t0 < TAG_ACK_WAIT_MS) {
-					n = LoRa_receive(&myLora, rx, sizeof(rx), 7000);
-					if (n >= 3 && rx[0] == MSG_WAKE && rx[1] == MY_TAG_ID) { seq = rx[2]; woke = 1; break; }
+				while (!woke && (HAL_GetTick() - t0) < TAG_ACK_WAIT_MS) {
+				    n = rx_window(&myLora, rx, sizeof(rx), TAG_ACK_WAIT_MS - (HAL_GetTick() - t0));
+				    if (n >= 3 && rx[0] == MSG_WAKE && rx[1] == MY_TAG_ID) { seq = rx[2]; woke = 1; }
 				}
+/********************* DEBUG CODE *******************/
+
+//				uint8_t woke = 0;
+//				t0 = HAL_GetTick();
+//				while (HAL_GetTick() - t0 < TAG_ACK_WAIT_MS) {
+//					n = LoRa_receive(&myLora, rx, sizeof(rx), 7000);
+//					if (n >= 3 && rx[0] == MSG_WAKE && rx[1] == MY_TAG_ID) { seq = rx[2]; woke = 1; break; }
+//				}
 				if (!woke) break;                                    // silence: seeker got the ACK
 				UART_Print("[TAG] WAKE again, resending ACK\r\n");
 			}
@@ -328,6 +374,7 @@ int main(void)
 				sprintf(dbg, "GPS valid=%d view=%d use=%d head=%u\r\n",
 				        hgps.is_valid, hgps.sats_in_view, hgps.sats_in_use, gps_head);
 				UART_Print(dbg);
+				gps_print();
 				gps_pack(pkt, seq++);
 				LoRa_transmit(&myLora, pkt, 12, 500);
 				t0 = HAL_GetTick();
@@ -415,175 +462,6 @@ void SystemClock_Config(void)
   {
     Error_Handler();
   }
-}
-
-/**
-  * @brief SPI1 Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_SPI1_Init(void)
-{
-
-  /* USER CODE BEGIN SPI1_Init 0 */
-
-  /* USER CODE END SPI1_Init 0 */
-
-  /* USER CODE BEGIN SPI1_Init 1 */
-
-  /* USER CODE END SPI1_Init 1 */
-  /* SPI1 parameter configuration*/
-  hspi1.Instance = SPI1;
-  hspi1.Init.Mode = SPI_MODE_MASTER;
-  hspi1.Init.Direction = SPI_DIRECTION_2LINES;
-  hspi1.Init.DataSize = SPI_DATASIZE_8BIT;
-  hspi1.Init.CLKPolarity = SPI_POLARITY_LOW;
-  hspi1.Init.CLKPhase = SPI_PHASE_1EDGE;
-  hspi1.Init.NSS = SPI_NSS_SOFT;
-  hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_2;
-  hspi1.Init.FirstBit = SPI_FIRSTBIT_MSB;
-  hspi1.Init.TIMode = SPI_TIMODE_DISABLE;
-  hspi1.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
-  hspi1.Init.CRCPolynomial = 10;
-  if (HAL_SPI_Init(&hspi1) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  /* USER CODE BEGIN SPI1_Init 2 */
-
-  /* USER CODE END SPI1_Init 2 */
-
-}
-
-/**
-  * @brief USART1 Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_USART1_UART_Init(void)
-{
-
-  /* USER CODE BEGIN USART1_Init 0 */
-
-  /* USER CODE END USART1_Init 0 */
-
-  /* USER CODE BEGIN USART1_Init 1 */
-
-  /* USER CODE END USART1_Init 1 */
-  huart1.Instance = USART1;
-  huart1.Init.BaudRate = 115200;
-  huart1.Init.WordLength = UART_WORDLENGTH_8B;
-  huart1.Init.StopBits = UART_STOPBITS_1;
-  huart1.Init.Parity = UART_PARITY_NONE;
-  huart1.Init.Mode = UART_MODE_TX_RX;
-  huart1.Init.HwFlowCtl = UART_HWCONTROL_NONE;
-  huart1.Init.OverSampling = UART_OVERSAMPLING_16;
-  if (HAL_UART_Init(&huart1) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  /* USER CODE BEGIN USART1_Init 2 */
-
-  /* USER CODE END USART1_Init 2 */
-
-}
-
-/**
-  * @brief USART2 Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_USART2_UART_Init(void)
-{
-
-  /* USER CODE BEGIN USART2_Init 0 */
-
-  /* USER CODE END USART2_Init 0 */
-
-  /* USER CODE BEGIN USART2_Init 1 */
-
-  /* USER CODE END USART2_Init 1 */
-  huart2.Instance = USART2;
-  huart2.Init.BaudRate = 115200;
-  huart2.Init.WordLength = UART_WORDLENGTH_8B;
-  huart2.Init.StopBits = UART_STOPBITS_1;
-  huart2.Init.Parity = UART_PARITY_NONE;
-  huart2.Init.Mode = UART_MODE_TX_RX;
-  huart2.Init.HwFlowCtl = UART_HWCONTROL_NONE;
-  huart2.Init.OverSampling = UART_OVERSAMPLING_16;
-  if (HAL_UART_Init(&huart2) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  /* USER CODE BEGIN USART2_Init 2 */
-
-  /* USER CODE END USART2_Init 2 */
-
-}
-
-/**
-  * Enable DMA controller clock
-  */
-static void MX_DMA_Init(void)
-{
-
-  /* DMA controller clock enable */
-  __HAL_RCC_DMA1_CLK_ENABLE();
-
-  /* DMA interrupt init */
-  /* DMA1_Channel5_IRQn interrupt configuration */
-  HAL_NVIC_SetPriority(DMA1_Channel5_IRQn, 0, 0);
-  HAL_NVIC_EnableIRQ(DMA1_Channel5_IRQn);
-
-}
-
-/**
-  * @brief GPIO Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_GPIO_Init(void)
-{
-  GPIO_InitTypeDef GPIO_InitStruct = {0};
-  /* USER CODE BEGIN MX_GPIO_Init_1 */
-
-  /* USER CODE END MX_GPIO_Init_1 */
-
-  /* GPIO Ports Clock Enable */
-  __HAL_RCC_GPIOC_CLK_ENABLE();
-  __HAL_RCC_GPIOA_CLK_ENABLE();
-  __HAL_RCC_GPIOB_CLK_ENABLE();
-
-  /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOB, LORA_NSS_Pin|LORA_RST_Pin, GPIO_PIN_SET);
-
-  /*Configure GPIO pin : LORA_NSS_Pin */
-  GPIO_InitStruct.Pin = LORA_NSS_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(LORA_NSS_GPIO_Port, &GPIO_InitStruct);
-
-  /*Configure GPIO pin : DIO0_Pin */
-  GPIO_InitStruct.Pin = DIO0_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  HAL_GPIO_Init(DIO0_GPIO_Port, &GPIO_InitStruct);
-
-  /*Configure GPIO pin : LORA_RST_Pin */
-  GPIO_InitStruct.Pin = LORA_RST_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_MEDIUM;
-  HAL_GPIO_Init(LORA_RST_GPIO_Port, &GPIO_InitStruct);
-
-  /* EXTI interrupt init*/
-  HAL_NVIC_SetPriority(EXTI1_IRQn, 0, 0);
-  HAL_NVIC_EnableIRQ(EXTI1_IRQn);
-
-  /* USER CODE BEGIN MX_GPIO_Init_2 */
-
-  /* USER CODE END MX_GPIO_Init_2 */
 }
 
 /* USER CODE BEGIN 4 */
